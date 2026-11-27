@@ -1,7 +1,10 @@
+
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    "jsx": "react-jsx",
+    "lib": ["ES2020", "DOM", "ES2020.Intl"],
     "paths": {
       "@/*": [
         "./src/*"

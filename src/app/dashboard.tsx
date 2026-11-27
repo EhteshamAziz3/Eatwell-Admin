@@ -1,37 +1,19 @@
-
 import axios from 'axios';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
-
+import { useCallback, useMemo, useState } from 'react';
 import {
-    ActivityIndicator,
-    RefreshControl,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  RefreshControl,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 
 import api from '../services/api';
 import { useAuthStore } from '../store/auth';
-
-const C = {
-  bg: '#F8F7F4',
-  white: '#FFFFFF',
-  dark: '#252525',
-  muted: '#858585',
-  orange: '#F59E0B',
-  orangeLight: '#FFF3D9',
-  green: '#16865B',
-  greenLight: '#E5F5EC',
-  red: '#D94B4B',
-  redLight: '#FCEAEA',
-  blue: '#4169A1',
-  blueLight: '#EAF0FF',
-  border: '#EEECE7',
-};
 
 type Order = {
   _id: string;
@@ -39,10 +21,12 @@ type Order = {
   totalAmount?: number;
   orderStatus?: string;
   paymentStatus?: string;
+  paymentMethod?: string;
+  orderType?: 'online' | 'offline' | string;
   items?: {
-    name: string;
-    quantity: number;
-    price: number;
+    name?: string;
+    quantity?: number;
+    price?: number;
   }[];
   user?: {
     name?: string;
@@ -52,62 +36,79 @@ type Order = {
 
 type OrdersResponse = {
   success: boolean;
-  count: number;
   orders: Order[];
   message?: string;
 };
 
-const ACTIVE_STATUSES = [
-  'confirmed',
-  'preparing',
-  'out_for_delivery',
-];
-
-const money = (value: number) =>
-  `₹${Number(value || 0).toLocaleString('en-IN')}`;
-
-const formatTime = (value?: string) => {
-  if (!value) return 'Time unavailable';
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) return 'Time unavailable';
-
-  return date.toLocaleTimeString('en-IN', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+const C = {
+  bg: '#F6F5F2',
+  white: '#FFFFFF',
+  ink: '#20211F',
+  muted: '#858780',
+  subtle: '#A5A69F',
+  orange: '#F59E0B',
+  orangeDark: '#D97706',
+  orangeSoft: '#FFF3D9',
+  green: '#16865B',
+  greenSoft: '#E5F5EC',
+  blue: '#4169A1',
+  blueSoft: '#EAF0FF',
+  red: '#D94B4B',
+  redSoft: '#FCEAEA',
+  border: '#ECEBE6',
+  dark: '#242522',
 };
 
-const formatStatus = (status?: string) => {
-  if (!status) return 'Unknown';
+const ACTIVE = ['confirmed', 'preparing', 'out_for_delivery'];
 
-  return status
+const money = (n: number) =>
+  `₹${Number(n || 0).toLocaleString('en-IN', {
+    maximumFractionDigits: 2,
+  })}`;
+
+const orderType = (o: Order): 'online' | 'offline' =>
+  o.orderType?.toLowerCase() === 'offline' ? 'offline' : 'online';
+
+const paid = (o: Order) =>
+  o.paymentStatus?.toLowerCase() === 'paid' &&
+  o.orderStatus !== 'cancelled';
+
+const statusText = (s?: string) =>
+  (s || 'unknown')
     .replace(/_/g, ' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-};
+    .replace(/\b\w/g, x => x.toUpperCase());
 
-const getTodayStart = () => {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date;
+const timeText = (s?: string) => {
+  if (!s) return 'Time unavailable';
+
+  const d = new Date(s);
+
+  return Number.isNaN(d.getTime())
+    ? 'Time unavailable'
+    : d.toLocaleString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
 };
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const token = useAuthStore((state) => state.token);
+  const token = useAuthStore(s => s.token);
 
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   // ==========================================
-  // FETCH ORDERS
+  // FETCH ORDERS FROM DATABASE
   // ==========================================
 
   const fetchOrders = useCallback(
-    async (isRefresh = false, silent = false) => {
+    async (refresh = false, silent = false) => {
       if (!token) {
         setError('Admin session not found. Please login again.');
         setLoading(false);
@@ -116,38 +117,39 @@ export default function DashboardScreen() {
       }
 
       try {
-        if (isRefresh) setRefreshing(true);
+        if (refresh) setRefreshing(true);
         else if (!silent) setLoading(true);
 
         if (!silent) setError('');
 
-        const response = await api.get<OrdersResponse>(
+        const res = await api.get<OrdersResponse>(
           '/orders/admin/all',
           {
             headers: {
               Authorization: `Bearer ${token}`,
             },
-          }
+          },
         );
 
         if (
-          !response.data.success ||
-          !Array.isArray(response.data.orders)
+          !res.data.success ||
+          !Array.isArray(res.data.orders)
         ) {
           throw new Error(
-            response.data.message || 'Invalid orders response.'
+            res.data.message || 'Invalid orders response.',
           );
         }
 
-        setOrders(response.data.orders);
+        setOrders(res.data.orders);
+        setLastUpdated(new Date());
         setError('');
-      } catch (err) {
-        console.error('Dashboard orders error:', err);
+      } catch (e) {
+        console.error('Dashboard orders error:', e);
 
-        if (axios.isAxiosError(err)) {
+        if (axios.isAxiosError(e)) {
           if (
-            err.response?.status === 401 ||
-            err.response?.status === 403
+            e.response?.status === 401 ||
+            e.response?.status === 403
           ) {
             await useAuthStore.getState().logout();
             router.replace('/login');
@@ -156,15 +158,17 @@ export default function DashboardScreen() {
 
           if (!silent) {
             setError(
-              err.response?.data?.message ||
-                `Unable to load orders (${err.response?.status || 'Network error'}).`
+              e.response?.data?.message ||
+                `Unable to load orders (${
+                  e.response?.status || 'Network error'
+                }).`,
             );
           }
         } else if (!silent) {
           setError(
-            err instanceof Error
-              ? err.message
-              : 'Something went wrong.'
+            e instanceof Error
+              ? e.message
+              : 'Something went wrong.',
           );
         }
       } finally {
@@ -172,7 +176,7 @@ export default function DashboardScreen() {
         setRefreshing(false);
       }
     },
-    [token, router]
+    [token, router],
   );
 
   // ==========================================
@@ -183,64 +187,102 @@ export default function DashboardScreen() {
     useCallback(() => {
       fetchOrders();
 
-      const interval = setInterval(() => {
+      const timer = setInterval(() => {
         fetchOrders(false, true);
       }, 15000);
 
-      return () => clearInterval(interval);
-    }, [fetchOrders])
+      return () => clearInterval(timer);
+    }, [fetchOrders]),
   );
 
   // ==========================================
   // DASHBOARD CALCULATIONS
   // ==========================================
 
-  const todayStart = getTodayStart();
+  const data = useMemo(() => {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
 
-  const todayOrders = orders.filter((order) => {
-    if (!order.createdAt) return false;
-
-    const date = new Date(order.createdAt);
-
-    return (
-      !Number.isNaN(date.getTime()) &&
-      date >= todayStart
-    );
-  });
-
-  const activeOrders = orders.filter((order) =>
-    ACTIVE_STATUSES.includes(order.orderStatus || '')
-  );
-
-  const pendingOrders = orders.filter(
-    (order) => order.orderStatus === 'pending'
-  );
-
-  const preparingOrders = orders.filter(
-    (order) => order.orderStatus === 'preparing'
-  );
-
-  const completedOrders = orders.filter(
-    (order) => order.orderStatus === 'delivered'
-  );
-
-  const cancelledOrders = orders.filter(
-    (order) => order.orderStatus === 'cancelled'
-  );
-
-  const todayRevenue = todayOrders
-    .filter((order) => order.orderStatus !== 'cancelled')
-    .reduce(
-      (total, order) =>
-        total + Number(order.totalAmount || 0),
-      0
+    const today = orders.filter(
+      o =>
+        o.createdAt &&
+        new Date(o.createdAt) >= start,
     );
 
-  // ==========================================
-  // LOGOUT
-  // ==========================================
+    const online = today.filter(
+      o => orderType(o) === 'online',
+    );
 
-  const handleLogout = async () => {
+    const offline = today.filter(
+      o => orderType(o) === 'offline',
+    );
+
+    const revenue = (list: Order[]) =>
+      list
+        .filter(paid)
+        .reduce(
+          (sum, o) =>
+            sum + Number(o.totalAmount || 0),
+          0,
+        );
+
+    return {
+      today,
+      online,
+      offline,
+
+      onlineRevenue: revenue(online),
+      offlineRevenue: revenue(offline),
+      totalRevenue: revenue(today),
+
+      allOnline: orders.filter(
+        o => orderType(o) === 'online',
+      ).length,
+
+      allOffline: orders.filter(
+        o => orderType(o) === 'offline',
+      ).length,
+
+      pending: orders.filter(
+        o => o.orderStatus === 'pending',
+      ).length,
+
+      preparing: orders.filter(
+        o => o.orderStatus === 'preparing',
+      ).length,
+
+      active: orders.filter(
+        o => ACTIVE.includes(o.orderStatus || ''),
+      ),
+
+      delivered: orders.filter(
+        o => o.orderStatus === 'delivered',
+      ).length,
+
+      cancelled: orders.filter(
+        o => o.orderStatus === 'cancelled',
+      ).length,
+    };
+  }, [orders]);
+
+  const onlinePct =
+    data.totalRevenue > 0
+      ? Math.round(
+          (data.onlineRevenue / data.totalRevenue) * 100,
+        )
+      : 0;
+
+  const offlinePct =
+    data.totalRevenue > 0
+      ? Math.round(
+          (data.offlineRevenue / data.totalRevenue) * 100,
+        )
+      : 0;
+
+  const go = (path: string) =>
+    router.push(path as any);
+
+  const logout = async () => {
     await useAuthStore.getState().logout();
     router.replace('/login');
   };
@@ -250,13 +292,13 @@ export default function DashboardScreen() {
   // ==========================================
 
   return (
-    <View style={styles.container}>
+    <View style={s.container}>
       <StatusBar barStyle="dark-content" />
 
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{
-          paddingBottom: activeOrders.length > 0 ? 115 : 35,
+          paddingBottom: data.active.length ? 112 : 35,
         }}
         refreshControl={
           <RefreshControl
@@ -268,66 +310,76 @@ export default function DashboardScreen() {
       >
         {/* HEADER */}
 
-        <View style={styles.header}>
+        <View style={s.header}>
           <View>
-            <Text style={styles.eyebrow}>
-              EATWELL RESTAURANT
+            <Text style={s.eyebrow}>
+              EATWELL • RESTAURANT MANAGEMENT
             </Text>
 
-            <Text style={styles.heading}>
+            <Text style={s.heading}>
               Dashboard
             </Text>
 
-            <Text style={styles.headerSubtitle}>
-              Here's your business overview
+            <Text style={s.subheading}>
+              Your business, at a glance.
             </Text>
           </View>
 
           <TouchableOpacity
-            style={styles.profile}
-            onPress={() => router.push('/settings' as any)}
+            style={s.avatar}
+            onPress={() => go('/settings')}
           >
-            <Text style={styles.profileText}>E</Text>
+            <Text style={s.avatarText}>E</Text>
           </TouchableOpacity>
         </View>
 
-        {/* WELCOME BANNER */}
+        {/* HERO BANNER */}
 
-        <View style={styles.banner}>
+        <View style={s.hero}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.bannerLabel}>
-              ADMIN OVERVIEW
+            <Text style={s.heroEyebrow}>
+              GOOD FOOD. GREAT BUSINESS.
             </Text>
 
-            <Text style={styles.bannerTitle}>
-              Good food.{' \n'}Great business.
+            <Text style={s.heroTitle}>
+              Welcome back, Admin
             </Text>
 
-            <Text style={styles.bannerSubtitle}>
-              Keep your restaurant running smoothly.
+            <Text style={s.heroSub}>
+              Keep your restaurant running smoothly today.
             </Text>
+
+            <View style={s.liveRow}>
+              <View style={s.liveDot} />
+
+              <Text style={s.liveText}>
+                LIVE ORDER SYNC
+              </Text>
+            </View>
           </View>
 
-          <Text style={styles.bannerEmoji}>🍔</Text>
+          <Text style={s.heroEmoji}>🍔</Text>
+
+          <View style={s.heroOrb} />
         </View>
 
         {/* ERROR */}
 
         {error ? (
-          <View style={styles.errorBox}>
-            <Text style={styles.errorTitle}>
+          <View style={s.errorBox}>
+            <Text style={s.errorTitle}>
               Couldn't load dashboard
             </Text>
 
-            <Text style={styles.errorMessage}>
+            <Text style={s.errorText}>
               {error}
             </Text>
 
             <TouchableOpacity
-              style={styles.retryButton}
+              style={s.retry}
               onPress={() => fetchOrders()}
             >
-              <Text style={styles.retryText}>
+              <Text style={s.retryText}>
                 Try again
               </Text>
             </TouchableOpacity>
@@ -337,283 +389,459 @@ export default function DashboardScreen() {
         {/* LOADING */}
 
         {loading ? (
-          <View style={styles.loadingBox}>
+          <View style={s.loading}>
             <ActivityIndicator
               size="large"
               color={C.orange}
             />
 
-            <Text style={styles.loadingText}>
-              Loading restaurant data...
+            <Text style={s.muted}>
+              Loading live restaurant data...
             </Text>
           </View>
         ) : (
           <>
             {/* REVENUE */}
 
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>
-                Today's Revenue
-              </Text>
+            <Section
+              title="Today's revenue"
+              subtitle="Paid orders · Cancelled orders excluded"
+              right="TODAY"
+            />
 
-              <Text style={styles.liveLabel}>
-                ● LIVE DATA
-              </Text>
-            </View>
+            <View style={s.revenueCard}>
+              <View style={s.revenueTop}>
+                <View style={s.rupeeIcon}>
+                  <Text style={s.rupee}>₹</Text>
+                </View>
 
-            <View style={styles.revenueCard}>
-              <View style={styles.revenueTop}>
-                <View style={styles.revenueIcon}>
-                  <Text style={{ fontSize: 22 }}>
-                    💰
+                <View style={{ flex: 1 }}>
+                  <Text style={s.revenueLabel}>
+                    Total collected revenue
+                  </Text>
+
+                  <Text style={s.mutedSmall}>
+                    Online + Offline
                   </Text>
                 </View>
 
-                <Text style={styles.revenueCaption}>
-                  From today's orders
+                <Text style={s.liveBadge}>
+                  ● LIVE
                 </Text>
               </View>
 
-              <Text style={styles.revenueAmount}>
-                {money(todayRevenue)}
+              <Text style={s.totalRevenue}>
+                {money(data.totalRevenue)}
               </Text>
 
-              <Text style={styles.revenueNote}>
-                Based on non-cancelled orders
-              </Text>
+              <View style={s.divider} />
+
+              <View style={s.split}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.channelLabel}>
+                    🟠 Online
+                  </Text>
+
+                  <Text style={s.splitAmount}>
+                    {money(data.onlineRevenue)}
+                  </Text>
+
+                  <Text style={s.mutedSmall}>
+                    {onlinePct}% of revenue
+                  </Text>
+                </View>
+
+                <View style={s.verticalDivider} />
+
+                <View style={{ flex: 1 }}>
+                  <Text style={s.channelLabel}>
+                    🟢 Offline / POS
+                  </Text>
+
+                  <Text style={s.splitAmount}>
+                    {money(data.offlineRevenue)}
+                  </Text>
+
+                  <Text style={s.mutedSmall}>
+                    {offlinePct}% of revenue
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* SALES CHANNELS */}
+
+            <Section
+              title="Sales channels"
+              subtitle="Today's order volume"
+            />
+
+            <View style={s.twoColumns}>
+              <View style={s.channelCard}>
+                <View style={s.channelHead}>
+                  <Text style={s.channelIcon}>📱</Text>
+
+                  <Text style={s.onlineTag}>
+                    ONLINE
+                  </Text>
+                </View>
+
+                <Text style={s.channelCount}>
+                  {data.online.length}
+                </Text>
+
+                <Text style={s.mutedSmall}>
+                  Customer app orders
+                </Text>
+
+                <Text style={s.channelMoney}>
+                  {money(data.onlineRevenue)}
+                </Text>
+              </View>
+
+              <View style={s.channelCard}>
+                <View style={s.channelHead}>
+                  <Text style={s.channelIcon}>🧾</Text>
+
+                  <Text style={s.offlineTag}>
+                    OFFLINE POS
+                  </Text>
+                </View>
+
+                <Text style={s.channelCount}>
+                  {data.offline.length}
+                </Text>
+
+                <Text style={s.mutedSmall}>
+                  Counter bills
+                </Text>
+
+                <Text style={s.channelMoney}>
+                  {money(data.offlineRevenue)}
+                </Text>
+              </View>
             </View>
 
             {/* ORDER OVERVIEW */}
 
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>
-                Order Overview
-              </Text>
+            <Section
+              title="Order overview"
+              subtitle="All-time order status"
+              action="Manage orders ›"
+              onAction={() => go('/orders')}
+            />
 
-              <Text style={styles.sectionHint}>
-                All time
-              </Text>
-            </View>
-
-            <View style={styles.statsGrid}>
-              <StatCard
+            <View style={s.statsGrid}>
+              <Stat
                 icon="📦"
-                label="Total Orders"
+                label="All orders"
                 value={orders.length}
-                color={C.orangeLight}
+                tint={C.orangeSoft}
               />
 
-              <StatCard
-                icon="🛍️"
-                label="Today's Orders"
-                value={todayOrders.length}
-                color={C.blueLight}
-              />
-
-              <StatCard
+              <Stat
                 icon="⏳"
                 label="Pending"
-                value={pendingOrders.length}
-                color="#FFF0E9"
+                value={data.pending}
+                tint="#FFF0E9"
               />
 
-              <StatCard
+              <Stat
                 icon="👨‍🍳"
                 label="Preparing"
-                value={preparingOrders.length}
-                color={C.orangeLight}
+                value={data.preparing}
+                tint={C.orangeSoft}
               />
 
-              <StatCard
-                icon="🚚"
-                label="Active Orders"
-                value={activeOrders.length}
-                color={C.blueLight}
+              <Stat
+                icon="🛵"
+                label="Active"
+                value={data.active.length}
+                tint={C.blueSoft}
               />
 
-              <StatCard
+              <Stat
                 icon="✅"
                 label="Delivered"
-                value={completedOrders.length}
-                color={C.greenLight}
+                value={data.delivered}
+                tint={C.greenSoft}
               />
 
-              <StatCard
+              <Stat
                 icon="🚫"
                 label="Cancelled"
-                value={cancelledOrders.length}
-                color={C.redLight}
+                value={data.cancelled}
+                tint={C.redSoft}
               />
             </View>
 
             {/* QUICK ACTIONS */}
 
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>
-                Quick Actions
-              </Text>
-            </View>
+            <Section
+              title="Quick actions"
+              subtitle="Manage your restaurant"
+            />
 
-            <View style={styles.actionsGrid}>
-              <ActionCard
-                icon="📋"
-                title="All Orders"
-                subtitle={`${orders.length} orders`}
-                onPress={() => router.push('/orders' as any)}
+            <View style={s.actionsGrid}>
+              <Action
+                icon="🛍️"
+                title="Online orders"
+                detail={`${data.allOnline} total orders`}
+                tint={C.orangeSoft}
+                onPress={() => go('/orders')}
               />
 
-              <ActionCard
+              <Action
+                icon="🧾"
+                title="POS billing"
+                detail="Create counter bill"
+                tint={C.greenSoft}
+                onPress={() => go('/pos')}
+              />
+
+              <Action
                 icon="🍔"
-                title="Food Menu"
-                subtitle="Manage food items"
-                onPress={() => router.push('/menu' as any)}
+                title="Food menu"
+                detail="Manage products"
+                tint={C.orangeSoft}
+                onPress={() => go('/menu')}
               />
 
-              <ActionCard
+              <Action
+                icon="📂"
+                title="Categories"
+                detail="Manage food categories"
+                tint={C.blueSoft}
+                onPress={() => go('/categories')}
+              />
+
+              <Action
+                icon="🚚"
+                title="Delivery"
+                detail="Track deliveries"
+                tint={C.blueSoft}
+                onPress={() => go('/delivery')}
+              />
+
+              <Action
                 icon="📊"
                 title="Analytics"
-                subtitle="Business performance"
-                onPress={() => router.push('/analytics' as any)}
-              />
-
-              <ActionCard
-                icon="⚙️"
-                title="Settings"
-                subtitle="Restaurant settings"
-                onPress={() => router.push('/settings' as any)}
+                detail="Revenue and reports"
+                tint={C.greenSoft}
+                onPress={() => go('/analytics')}
               />
             </View>
 
             {/* RECENT ORDERS */}
 
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>
-                Recent Orders
-              </Text>
-
-              <TouchableOpacity
-                onPress={() => router.push('/orders' as any)}
-              >
-                <Text style={styles.viewAll}>
-                  View all →
-                </Text>
-              </TouchableOpacity>
-            </View>
+            <Section
+              title="Recent orders"
+              subtitle="Latest restaurant activity"
+              action="View all ›"
+              onAction={() => go('/orders')}
+            />
 
             {orders.length === 0 ? (
-              <View style={styles.emptyCard}>
-                <Text style={styles.emptyEmoji}>📋</Text>
+              <View style={s.empty}>
+                <Text style={{ fontSize: 34 }}>
+                  📋
+                </Text>
 
-                <Text style={styles.emptyTitle}>
+                <Text style={s.emptyTitle}>
                   No orders yet
                 </Text>
 
-                <Text style={styles.emptySubtitle}>
-                  New customer orders will appear here.
+                <Text style={s.mutedSmall}>
+                  Customer orders and POS bills will appear here.
                 </Text>
               </View>
             ) : (
-              orders.slice(0, 5).map((order) => (
-                <View
-                  key={order._id}
-                  style={styles.orderCard}
-                >
-                  <View style={styles.orderTop}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.orderId}>
-                        #{order._id.slice(-7).toUpperCase()}
-                      </Text>
-
-                      <Text style={styles.orderCustomer}>
-                        {order.user?.name || 'Customer'}
-                      </Text>
-
-                      <Text style={styles.orderTime}>
-                        {formatTime(order.createdAt)}
-                      </Text>
-                    </View>
-
-                    <View style={styles.orderRight}>
-                      <Text style={styles.orderAmount}>
-                        {money(Number(order.totalAmount || 0))}
-                      </Text>
-
-                      <StatusPill
-                        status={order.orderStatus}
-                      />
-                    </View>
-                  </View>
-
-                  <View style={styles.orderDivider} />
-
-                  <Text
-                    style={styles.orderItems}
-                    numberOfLines={2}
+              [...orders]
+                .sort(
+                  (a, b) =>
+                    new Date(b.createdAt || 0).getTime() -
+                    new Date(a.createdAt || 0).getTime(),
+                )
+                .slice(0, 6)
+                .map(o => (
+                  <TouchableOpacity
+                    key={o._id}
+                    style={s.orderCard}
+                    activeOpacity={0.85}
+                    onPress={() => go('/orders')}
                   >
-                    {order.items
-                      ?.map(
-                        (item) =>
-                          `${item.name} × ${item.quantity}`
-                      )
-                      .join(', ') || 'Order items unavailable'}
-                  </Text>
+                    <View style={s.orderHead}>
+                      <View style={{ flex: 1 }}>
+                        <View style={s.orderTitleRow}>
+                          <Text style={s.orderId}>
+                            #{o._id.slice(-7).toUpperCase()}
+                          </Text>
 
-                  <Text style={styles.orderPayment}>
-                    Payment: {formatStatus(order.paymentStatus)}
-                  </Text>
-                </View>
-              ))
+                          <TypePill type={orderType(o)} />
+                        </View>
+
+                        <Text style={s.customer}>
+                          {o.user?.name ||
+                            (orderType(o) === 'offline'
+                              ? 'Walk-in customer'
+                              : 'Customer')}
+                        </Text>
+
+                        <Text style={s.mutedSmall}>
+                          {timeText(o.createdAt)}
+                        </Text>
+                      </View>
+
+                      <View style={{ alignItems: 'flex-end', gap: 7 }}>
+                        <Text style={s.orderAmount}>
+                          {money(Number(o.totalAmount || 0))}
+                        </Text>
+
+                        <StatusPill status={o.orderStatus} />
+                      </View>
+                    </View>
+
+                    <View style={s.divider} />
+
+                    <Text
+                      style={s.orderItems}
+                      numberOfLines={2}
+                    >
+                      {o.items
+                        ?.map(
+                          i =>
+                            `${i.name || 'Item'} × ${i.quantity || 1}`,
+                        )
+                        .join(', ') || 'Order items unavailable'}
+                    </Text>
+
+                    <View style={s.orderFoot}>
+                      <Text style={s.mutedSmall}>
+                        Payment: {statusText(o.paymentStatus)}
+                        {o.paymentMethod
+                          ? ` · ${statusText(o.paymentMethod)}`
+                          : ''}
+                      </Text>
+
+                      <Text style={s.viewOrder}>
+                        View ›
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))
             )}
+
+            {/* LAST SYNC */}
+
+            <Text style={s.syncText}>
+              {lastUpdated
+                ? `Last synced ${lastUpdated.toLocaleTimeString('en-IN', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}`
+                : 'Waiting for sync'}
+            </Text>
+
+            <Text style={s.version}>
+              EATWELL ADMIN • 2.0
+            </Text>
 
             {/* LOGOUT */}
 
             <TouchableOpacity
-              style={styles.logoutButton}
-              onPress={handleLogout}
+              style={s.logout}
+              onPress={logout}
             >
-              <Text style={styles.logoutText}>
-                Logout
+              <Text style={s.logoutText}>
+                Log out
               </Text>
             </TouchableOpacity>
           </>
         )}
-
-        <Text style={styles.footer}>
-          EATWELL ADMIN • VERSION 1.0.0
-        </Text>
       </ScrollView>
 
-      {/* FLOATING ACTIVE ORDERS BUTTON */}
+      {/* FLOATING ACTIVE ORDERS */}
 
-      {activeOrders.length > 0 && (
+      {data.active.length > 0 && !loading ? (
         <TouchableOpacity
-          activeOpacity={0.85}
-          style={styles.floatingActiveButton}
-          onPress={() => router.push('/orders' as any)}
+          style={s.floating}
+          activeOpacity={0.88}
+          onPress={() => go('/orders')}
         >
-          <View style={styles.activeIcon}>
-            <Text style={{ fontSize: 21 }}>🛵</Text>
-          </View>
+          <Text style={{ fontSize: 21 }}>🛵</Text>
 
           <View style={{ flex: 1 }}>
-            <Text style={styles.activeTitle}>
-              Active Orders
+            <Text style={s.floatingTitle}>
+              Orders need attention
             </Text>
 
-            <Text style={styles.activeSubtitle}>
-              {activeOrders.length} order(s) need attention
-            </Text>
-          </View>
-
-          <View style={styles.activeCount}>
-            <Text style={styles.activeCountText}>
-              {activeOrders.length}
+            <Text style={s.floatingSub}>
+              {data.active.length} active order(s) in progress
             </Text>
           </View>
 
-          <Text style={styles.activeArrow}>›</Text>
+          <View style={s.floatingCount}>
+            <Text
+              style={{
+                color: C.white,
+                fontWeight: '900',
+              }}
+            >
+              {data.active.length}
+            </Text>
+          </View>
+
+          <Text style={{ color: C.white, fontSize: 24 }}>
+            ›
+          </Text>
         </TouchableOpacity>
-      )}
+      ) : null}
+    </View>
+  );
+}
+
+// ==========================================
+// SECTION HEADER
+// ==========================================
+
+function Section({
+  title,
+  subtitle,
+  right,
+  action,
+  onAction,
+}: {
+  title: string;
+  subtitle?: string;
+  right?: string;
+  action?: string;
+  onAction?: () => void;
+}) {
+  return (
+    <View style={s.section}>
+      <View>
+        <Text style={s.sectionTitle}>
+          {title}
+        </Text>
+
+        {subtitle ? (
+          <Text style={s.sectionSub}>
+            {subtitle}
+          </Text>
+        ) : null}
+      </View>
+
+      {action ? (
+        <TouchableOpacity onPress={onAction}>
+          <Text style={s.sectionAction}>
+            {action}
+          </Text>
+        </TouchableOpacity>
+      ) : right ? (
+        <Text style={s.today}>
+          {right}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -622,99 +850,169 @@ export default function DashboardScreen() {
 // STAT CARD
 // ==========================================
 
-function StatCard({
+function Stat({
   icon,
   label,
   value,
-  color,
+  tint,
 }: {
   icon: string;
   label: string;
   value: number;
-  color: string;
+  tint: string;
 }) {
   return (
-    <View style={styles.statCard}>
+    <View style={s.stat}>
       <View
         style={[
-          styles.statIcon,
-          { backgroundColor: color },
+          s.statIcon,
+          { backgroundColor: tint },
         ]}
       >
-        <Text style={{ fontSize: 19 }}>{icon}</Text>
+        <Text style={{ fontSize: 17 }}>
+          {icon}
+        </Text>
       </View>
 
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={s.statValue}>
+        {value}
+      </Text>
+
+      <Text style={s.statLabel}>
+        {label}
+      </Text>
     </View>
   );
 }
 
 // ==========================================
-// ACTION CARD
+// QUICK ACTION CARD
 // ==========================================
 
-function ActionCard({
+function Action({
   icon,
   title,
-  subtitle,
+  detail,
+  tint,
   onPress,
 }: {
   icon: string;
   title: string;
-  subtitle: string;
+  detail: string;
+  tint: string;
   onPress: () => void;
 }) {
   return (
     <TouchableOpacity
-      style={styles.actionCard}
-      activeOpacity={0.75}
+      style={s.action}
+      activeOpacity={0.8}
       onPress={onPress}
     >
-      <View style={styles.actionIcon}>
-        <Text style={{ fontSize: 21 }}>{icon}</Text>
+      <View
+        style={[
+          s.actionIcon,
+          { backgroundColor: tint },
+        ]}
+      >
+        <Text style={{ fontSize: 20 }}>
+          {icon}
+        </Text>
       </View>
 
-      <Text style={styles.actionTitle}>{title}</Text>
-      <Text style={styles.actionSubtitle}>{subtitle}</Text>
+      <Text style={s.actionTitle}>
+        {title}
+      </Text>
+
+      <Text style={s.actionDetail}>
+        {detail}
+      </Text>
+
+      <Text style={s.actionArrow}>
+        ↗
+      </Text>
     </TouchableOpacity>
   );
 }
 
 // ==========================================
-// STATUS PILL
+// ONLINE / OFFLINE PILL
 // ==========================================
 
-function StatusPill({ status }: { status?: string }) {
-  const value = status || 'unknown';
-
-  const color =
-    value === 'delivered'
-      ? C.green
-      : value === 'cancelled'
-        ? C.red
-        : value === 'pending'
-          ? '#C17A00'
-          : C.blue;
-
-  const background =
-    value === 'delivered'
-      ? C.greenLight
-      : value === 'cancelled'
-        ? C.redLight
-        : value === 'pending'
-          ? C.orangeLight
-          : C.blueLight;
+function TypePill({
+  type,
+}: {
+  type: 'online' | 'offline';
+}) {
+  const off = type === 'offline';
 
   return (
     <View
       style={[
-        styles.statusPill,
-        { backgroundColor: background },
+        s.typePill,
+        {
+          backgroundColor: off
+            ? C.greenSoft
+            : C.orangeSoft,
+        },
       ]}
     >
-      <Text style={[styles.statusText, { color }]}>
-        {formatStatus(status)}
+      <Text
+        style={{
+          color: off ? C.green : C.orangeDark,
+          fontSize: 8,
+          fontWeight: '900',
+        }}
+      >
+        {off ? 'OFFLINE' : 'ONLINE'}
+      </Text>
+    </View>
+  );
+}
+
+// ==========================================
+// ORDER STATUS PILL
+// ==========================================
+
+function StatusPill({
+  status,
+}: {
+  status?: string;
+}) {
+  const v = status || 'unknown';
+
+  const color =
+    v === 'delivered'
+      ? C.green
+      : v === 'cancelled'
+        ? C.red
+        : v === 'pending'
+          ? '#C17A00'
+          : C.blue;
+
+  const bg =
+    v === 'delivered'
+      ? C.greenSoft
+      : v === 'cancelled'
+        ? C.redSoft
+        : v === 'pending'
+          ? C.orangeSoft
+          : C.blueSoft;
+
+  return (
+    <View
+      style={[
+        s.statusPill,
+        { backgroundColor: bg },
+      ]}
+    >
+      <Text
+        style={{
+          color,
+          fontSize: 8,
+          fontWeight: '900',
+        }}
+      >
+        {statusText(status)}
       </Text>
     </View>
   );
@@ -724,7 +1022,7 @@ function StatusPill({ status }: { status?: string }) {
 // STYLES
 // ==========================================
 
-const styles = StyleSheet.create({
+const s = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: C.bg,
@@ -733,113 +1031,158 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 22,
     paddingTop: 22,
-    paddingBottom: 20,
+    paddingBottom: 19,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
 
   eyebrow: {
-    color: C.orange,
-    fontSize: 10,
+    color: C.orangeDark,
+    fontSize: 9,
     fontWeight: '900',
-    letterSpacing: 2,
+    letterSpacing: 1.5,
   },
 
   heading: {
-    color: C.dark,
-    fontSize: 27,
+    color: C.ink,
+    fontSize: 29,
     fontWeight: '900',
     marginTop: 5,
   },
 
-  headerSubtitle: {
+  subheading: {
     color: C.muted,
     fontSize: 12,
     marginTop: 4,
   },
 
-  profile: {
-    width: 46,
-    height: 46,
+  avatar: {
+    width: 47,
+    height: 47,
     borderRadius: 16,
-    backgroundColor: C.orange,
+    backgroundColor: C.dark,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  profileText: {
+  avatarText: {
     color: C.white,
-    fontSize: 24,
+    fontSize: 23,
     fontWeight: '900',
   },
 
-  banner: {
+  hero: {
     marginHorizontal: 20,
     padding: 21,
-    borderRadius: 22,
-    backgroundColor: '#252525',
+    minHeight: 165,
+    borderRadius: 23,
+    backgroundColor: C.dark,
     flexDirection: 'row',
     alignItems: 'center',
+    overflow: 'hidden',
   },
 
-  bannerLabel: {
+  heroEyebrow: {
     color: '#FFC45A',
     fontSize: 9,
     fontWeight: '900',
-    letterSpacing: 2,
+    letterSpacing: 1.2,
   },
 
-  bannerTitle: {
+  heroTitle: {
     color: C.white,
-    fontSize: 27,
+    fontSize: 23,
     fontWeight: '900',
-    lineHeight: 33,
-    marginTop: 10,
+    marginTop: 12,
   },
 
-  bannerSubtitle: {
-    color: '#D0D0D0',
+  heroSub: {
+    color: '#C9CAC4',
     fontSize: 11,
-    marginTop: 9,
+    marginTop: 7,
+    lineHeight: 17,
+    maxWidth: 220,
   },
 
-  bannerEmoji: {
-    fontSize: 55,
-    marginLeft: 8,
+  liveRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginTop: 15,
   },
 
-  sectionHeader: {
+  liveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#64D49B',
+  },
+
+  liveText: {
+    color: '#B8C9BE',
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+
+  heroEmoji: {
+    fontSize: 53,
+    marginLeft: 5,
+    zIndex: 2,
+  },
+
+  heroOrb: {
+    position: 'absolute',
+    width: 170,
+    height: 170,
+    borderRadius: 90,
+    right: -60,
+    top: 35,
+    backgroundColor: '#35362F',
+  },
+
+  section: {
     marginHorizontal: 22,
     marginTop: 27,
-    marginBottom: 14,
+    marginBottom: 13,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
 
   sectionTitle: {
-    color: C.dark,
+    color: C.ink,
     fontSize: 17,
     fontWeight: '900',
   },
 
-  sectionHint: {
+  sectionSub: {
     color: C.muted,
     fontSize: 10,
+    marginTop: 4,
   },
 
-  liveLabel: {
-    color: C.green,
+  sectionAction: {
+    color: C.orangeDark,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+
+  today: {
+    color: C.orangeDark,
+    backgroundColor: C.orangeSoft,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
     fontSize: 9,
     fontWeight: '900',
-    letterSpacing: 1,
   },
 
   revenueCard: {
     marginHorizontal: 20,
     padding: 19,
-    borderRadius: 19,
+    borderRadius: 21,
     backgroundColor: C.white,
     borderWidth: 1,
     borderColor: C.border,
@@ -848,72 +1191,173 @@ const styles = StyleSheet.create({
   revenueTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 11,
   },
 
-  revenueIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 13,
-    backgroundColor: C.greenLight,
+  rupeeIcon: {
+    width: 43,
+    height: 43,
+    borderRadius: 14,
+    backgroundColor: C.greenSoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  revenueCaption: {
-    color: C.muted,
-    fontSize: 12,
-  },
-
-  revenueAmount: {
-    color: C.dark,
-    fontSize: 32,
+  rupee: {
+    color: C.green,
+    fontSize: 23,
     fontWeight: '900',
-    marginTop: 17,
   },
 
-  revenueNote: {
+  revenueLabel: {
+    color: C.ink,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+
+  mutedSmall: {
+    color: C.muted,
+    fontSize: 9,
+    marginTop: 4,
+  },
+
+  liveBadge: {
+    color: C.green,
+    backgroundColor: C.greenSoft,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 7,
+    fontSize: 8,
+    fontWeight: '900',
+  },
+
+  totalRevenue: {
+    color: C.ink,
+    fontSize: 34,
+    fontWeight: '900',
+    marginTop: 18,
+  },
+
+  divider: {
+    height: 1,
+    backgroundColor: C.border,
+    marginVertical: 12,
+  },
+
+  split: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+
+  verticalDivider: {
+    width: 1,
+    height: 48,
+    backgroundColor: C.border,
+    marginHorizontal: 13,
+  },
+
+  channelLabel: {
     color: C.muted,
     fontSize: 10,
-    marginTop: 5,
+    fontWeight: '700',
+  },
+
+  splitAmount: {
+    color: C.ink,
+    fontSize: 17,
+    fontWeight: '900',
+    marginTop: 8,
+  },
+
+  twoColumns: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    gap: 11,
+  },
+
+  channelCard: {
+    flex: 1,
+    padding: 15,
+    borderRadius: 18,
+    backgroundColor: C.white,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+
+  channelHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+
+  channelIcon: {
+    fontSize: 22,
+  },
+
+  onlineTag: {
+    color: C.orangeDark,
+    fontSize: 8,
+    fontWeight: '900',
+  },
+
+  offlineTag: {
+    color: C.green,
+    fontSize: 8,
+    fontWeight: '900',
+  },
+
+  channelCount: {
+    color: C.ink,
+    fontSize: 27,
+    fontWeight: '900',
+    marginTop: 13,
+  },
+
+  channelMoney: {
+    color: C.ink,
+    fontSize: 13,
+    fontWeight: '900',
+    marginTop: 10,
   },
 
   statsGrid: {
     paddingHorizontal: 20,
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 12,
+    gap: 10,
   },
 
-  statCard: {
-    width: '48%',
+  stat: {
+    width: '31%',
     flexGrow: 1,
+    minWidth: 95,
     backgroundColor: C.white,
-    borderRadius: 17,
-    padding: 15,
+    borderRadius: 16,
+    padding: 13,
     borderWidth: 1,
     borderColor: C.border,
   },
 
   statIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 11,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
   statValue: {
-    color: C.dark,
-    fontSize: 25,
+    color: C.ink,
+    fontSize: 23,
     fontWeight: '900',
-    marginTop: 13,
+    marginTop: 12,
   },
 
   statLabel: {
     color: C.muted,
-    fontSize: 11,
-    fontWeight: '600',
+    fontSize: 10,
+    fontWeight: '700',
     marginTop: 3,
   },
 
@@ -921,122 +1365,125 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 12,
+    gap: 11,
   },
 
-  actionCard: {
-    width: '48%',
+  action: {
+    width: '31%',
     flexGrow: 1,
+    minWidth: 100,
     backgroundColor: C.white,
     borderRadius: 17,
-    padding: 15,
+    padding: 13,
     borderWidth: 1,
     borderColor: C.border,
   },
 
   actionIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 13,
-    backgroundColor: C.orangeLight,
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
   actionTitle: {
-    color: C.dark,
-    fontSize: 14,
-    fontWeight: '900',
-    marginTop: 12,
-  },
-
-  actionSubtitle: {
-    color: C.muted,
-    fontSize: 10,
-    marginTop: 4,
-  },
-
-  viewAll: {
-    color: C.orange,
+    color: C.ink,
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '900',
+    marginTop: 11,
+  },
+
+  actionDetail: {
+    color: C.muted,
+    fontSize: 9,
+    marginTop: 4,
+    lineHeight: 13,
+  },
+
+  actionArrow: {
+    color: C.orangeDark,
+    fontSize: 15,
+    fontWeight: '900',
+    position: 'absolute',
+    right: 12,
+    top: 12,
   },
 
   orderCard: {
     marginHorizontal: 20,
-    marginBottom: 12,
-    padding: 16,
+    marginBottom: 10,
+    padding: 15,
     backgroundColor: C.white,
     borderRadius: 17,
     borderWidth: 1,
     borderColor: C.border,
   },
 
-  orderTop: {
+  orderHead: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    gap: 10,
+  },
+
+  orderTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    flexWrap: 'wrap',
   },
 
   orderId: {
-    color: C.dark,
-    fontSize: 13,
+    color: C.ink,
+    fontSize: 12,
     fontWeight: '900',
   },
 
-  orderCustomer: {
-    color: C.dark,
-    fontSize: 12,
-    marginTop: 6,
+  typePill: {
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+
+  customer: {
+    color: C.ink,
+    fontSize: 11,
+    marginTop: 7,
     fontWeight: '700',
   },
 
-  orderTime: {
-    color: C.muted,
-    fontSize: 10,
-    marginTop: 4,
-  },
-
-  orderRight: {
-    alignItems: 'flex-end',
-    gap: 8,
+  statusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 7,
   },
 
   orderAmount: {
-    color: C.dark,
-    fontSize: 15,
+    color: C.ink,
+    fontSize: 14,
     fontWeight: '900',
   },
 
-  statusPill: {
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    borderRadius: 8,
+  orderItems: {
+    color: C.ink,
+    fontSize: 10,
+    lineHeight: 16,
   },
 
-  statusText: {
+  orderFoot: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+
+  viewOrder: {
+    color: C.orangeDark,
     fontSize: 9,
     fontWeight: '900',
   },
 
-  orderDivider: {
-    height: 1,
-    backgroundColor: C.border,
-    marginVertical: 12,
-  },
-
-  orderItems: {
-    color: C.dark,
-    fontSize: 11,
-    lineHeight: 17,
-  },
-
-  orderPayment: {
-    color: C.muted,
-    fontSize: 10,
-    marginTop: 8,
-  },
-
-  emptyCard: {
+  empty: {
     marginHorizontal: 20,
     padding: 25,
     backgroundColor: C.white,
@@ -1046,155 +1493,128 @@ const styles = StyleSheet.create({
     borderColor: C.border,
   },
 
-  emptyEmoji: {
-    fontSize: 35,
-  },
-
   emptyTitle: {
-    color: C.dark,
+    color: C.ink,
     fontSize: 14,
     fontWeight: '900',
-    marginTop: 12,
+    marginTop: 11,
   },
 
-  emptySubtitle: {
-    color: C.muted,
-    fontSize: 11,
-    textAlign: 'center',
-    marginTop: 7,
-  },
-
-  loadingBox: {
+  loading: {
     padding: 45,
     alignItems: 'center',
+    gap: 12,
   },
 
-  loadingText: {
+  muted: {
     color: C.muted,
-    fontSize: 12,
-    marginTop: 12,
+    fontSize: 11,
   },
 
   errorBox: {
     marginHorizontal: 20,
-    marginTop: 20,
-    padding: 17,
+    marginTop: 18,
+    padding: 16,
     borderRadius: 15,
-    backgroundColor: C.redLight,
+    backgroundColor: C.redSoft,
   },
 
   errorTitle: {
     color: C.red,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '900',
   },
 
-  errorMessage: {
-    color: C.dark,
-    fontSize: 11,
-    marginTop: 7,
+  errorText: {
+    color: C.ink,
+    fontSize: 10,
+    marginTop: 6,
   },
 
-  retryButton: {
+  retry: {
     alignSelf: 'flex-start',
-    marginTop: 12,
+    marginTop: 11,
     backgroundColor: C.white,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 9,
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+    borderRadius: 8,
   },
 
   retryText: {
     color: C.red,
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '900',
   },
 
-  logoutButton: {
+  syncText: {
+    color: C.muted,
+    fontSize: 9,
+    textAlign: 'center',
+    marginTop: 22,
+  },
+
+  version: {
+    color: C.subtle,
+    fontSize: 8,
+    letterSpacing: 1.3,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginTop: 5,
+  },
+
+  logout: {
     marginHorizontal: 20,
-    marginTop: 25,
-    padding: 15,
-    backgroundColor: C.redLight,
-    borderRadius: 13,
+    marginTop: 18,
+    padding: 13,
+    backgroundColor: C.redSoft,
+    borderRadius: 12,
     alignItems: 'center',
   },
 
   logoutText: {
     color: C.red,
-    fontWeight: '800',
-    fontSize: 13,
+    fontWeight: '900',
+    fontSize: 11,
   },
 
-  footer: {
-    textAlign: 'center',
-    color: '#A5A29B',
-    fontSize: 9,
-    letterSpacing: 2,
-    marginTop: 23,
-    marginBottom: 30,
-  },
-
-  // FLOATING ACTIVE ORDERS
-
-  floatingActiveButton: {
+  floating: {
     position: 'absolute',
-    bottom: 18,
-    left: 16,
-    right: 16,
-    minHeight: 72,
-    backgroundColor: '#252525',
+    bottom: 16,
+    left: 15,
+    right: 15,
+    minHeight: 70,
+    backgroundColor: C.dark,
     borderRadius: 19,
-    paddingHorizontal: 14,
+    paddingHorizontal: 13,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 11,
+    gap: 10,
     elevation: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.18,
     shadowRadius: 9,
   },
 
-  activeIcon: {
-    width: 43,
-    height: 43,
-    borderRadius: 14,
-    backgroundColor: '#3A3328',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  activeTitle: {
-    color: C.white,
-    fontSize: 14,
-    fontWeight: '900',
-  },
-
-  activeSubtitle: {
-    color: '#BDBDBD',
-    fontSize: 10,
-    marginTop: 4,
-  },
-
-  activeCount: {
-    minWidth: 29,
-    height: 29,
-    paddingHorizontal: 7,
-    borderRadius: 15,
-    backgroundColor: C.orange,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  activeCountText: {
+  floatingTitle: {
     color: C.white,
     fontSize: 12,
     fontWeight: '900',
   },
 
-  activeArrow: {
-    color: C.white,
-    fontSize: 28,
-    fontWeight: '400',
+  floatingSub: {
+    color: '#BDBEB7',
+    fontSize: 9,
+    marginTop: 4,
+  },
+
+  floatingCount: {
+    minWidth: 28,
+    height: 28,
+    paddingHorizontal: 7,
+    borderRadius: 15,
+    backgroundColor: C.orange,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
